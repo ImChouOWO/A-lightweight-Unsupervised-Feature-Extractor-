@@ -1,7 +1,7 @@
 yoloWeight: "model/yolov7/weights/yolov7_best.pt"
 yoloFeats: "model/res/checkpoints"
-datasetPath : "/home/soic/Desktop/tracking/A-lightweight-Unsupervised-Feature-Extractor/model/res/val/now"
-ckpt: "/home/soic/Desktop/tracking/A-lightweight-Unsupervised-Feature-Extractor/model/res/checkpoints/epoch_last.pt"
+datasetPath : "PATH/TO/YOUR/DATASET"
+ckpt: "PATH/TO/ENCORDER/CHECKPOINTS"
 warmupEpochs: 10
 epoch: 500
 isPreprocess: true
