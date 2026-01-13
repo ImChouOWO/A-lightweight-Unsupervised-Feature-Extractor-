@@ -55,18 +55,21 @@ def _init_training(pkl_path,world_size, local_rank, device="cuda", warmup_epochs
     if is_main:
         print("\033[1;37;42m[Hint] Initializing training...\033[0m")
         print("[Status] DataLoader: offline, Model: offline\n Starting initialization DataLoader...")
-    transform = trainingCardMod.FeatureAugment(noise_std=0.05, drop_prob=0.1)
-    dataset = trainingCardMod.CreatDataset(
-                pkl_path=pkl_path,
-                min_conf=0.3,
-                transform=transform)
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=world_size,
-        rank=dist.get_rank(),      
-        shuffle=True,
-        drop_last=True,
-    )
+    try:
+        transform = trainingCardMod.FeatureAugment(noise_std=0.05, drop_prob=0.1)
+        dataset = trainingCardMod.CreatDataset(
+                    pkl_path=pkl_path,
+                    min_conf=0.3,
+                    transform=transform)
+        sampler = DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=dist.get_rank(),      
+            shuffle=True,
+            drop_last=True,
+        )
+    except Exception as e:
+        print(f"Error during DataLoader initialization: {e}")
     if is_main:
         print("[Device] Using device:", device)
     
@@ -83,42 +86,60 @@ def _init_training(pkl_path,world_size, local_rank, device="cuda", warmup_epochs
     )
     
     device = torch.device(f"cuda:{local_rank}")
-    if is_main:
-        print("[Status] DataLoader: Online, Model: offline\n Starting initialization Model...")
-    
-    model = encoderAndHead.Model(
-                in_channels=512,
-                out_channels=512,
-                warmup_epochs = warmup_epochs,
-                proj_dim = 128).to(device)
-    # disable inplace before training (safe even if already applied)
-    model.apply(disable_inplace)
-    if ckpt_path is not None:
-        ckpt = torch.load(ckpt_path, map_location="cpu")
-        print("[Status] loading checkpoint sucess")
-    else:
-        ckpt = None
-        print("[Status] No checkpoint, start with empty")
+    try:
+        if is_main:
+            print("[Status] DataLoader: Online, Model: offline\n Starting initialization Model...")
+        
+        model = encoderAndHead.Model(
+                    in_channels=512,
+                    out_channels=512,
+                    warmup_epochs = warmup_epochs,
+                    proj_dim = 128).to(device)
+        # disable inplace before training (safe even if already applied)
+        model.apply(disable_inplace)
+        if ckpt_path is not None:
+            ckpt_path = Path(ckpt_path)
 
-    if ckpt_path is not None:    
-        model.load_state_dict(ckpt["model"], strict=True)
+            if not ckpt_path.exists():
+                raise FileNotFoundError(f"[ERROR] Checkpoint not found: {ckpt_path}")
 
-    model = DDP(
-        model,
-        device_ids=[local_rank],
-        output_device=local_rank,
-        find_unused_parameters=False,
-    )
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=3e-4,
-        weight_decay=1e-4
-    )
-    if ckpt_path is not None:    
-        optimizer.load_state_dict(ckpt["optimizer"])
+            print(f"[INFO] Loading checkpoint from: {ckpt_path}")
 
-    criterion = loss.NTXentLoss(temperature=0.2).to(device)
-    klsim  = loss.KLSimilarityLoss(tau_t=0.07, tau_s=0.2).to(device)
+            ckpt = torch.load(ckpt_path, map_location="cpu")
+
+            # 常見格式保護
+            if "model" in ckpt:
+                model.load_state_dict(ckpt["model"], strict=True)
+            else:
+                # 有些 checkpoint 直接存 state_dict
+                model.load_state_dict(ckpt, strict=True)
+
+            print("[INFO] Checkpoint loaded successfully.")
+        else:
+            ckpt = None
+            print("[Status] No checkpoint, start with empty")
+
+        if ckpt_path is not None:    
+            model.load_state_dict(ckpt["model"], strict=True)
+
+        model = DDP(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            find_unused_parameters=False,
+        )
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=3e-4,
+            weight_decay=1e-4
+        )
+        if ckpt_path is not None:    
+            optimizer.load_state_dict(ckpt["optimizer"])
+
+        criterion = loss.NTXentLoss(temperature=0.2).to(device)
+        klsim  = loss.KLSimilarityLoss(tau_t=0.07, tau_s=0.2).to(device)
+    except Exception as e:
+        print(f"Error during Model initialization: {e}")
     if is_main:
         print("[Status] DataLoader: Online, Model: Online")
         print("\033[1;37;42m[Hint] All initialization complete.\033[0m")
@@ -136,7 +157,7 @@ def set_lr(optimizer, lr):
 def preprocess(yolo_weight = None, dataset_path=None, preprocess_res_path=None):
     yolov7_feats = trainingCardMod.PreProcess(weight_path=yolo_weight,
                                         dataset_path=dataset_path,
-                                        preprocess_res_path=preprocess_res_path)
+                                        preprocess_res_path="model/res/checkpoints",)
     try:
         
         yolov7_feats._preprocess_yolov7()
@@ -411,9 +432,9 @@ def load_config_yaml(config_path: str):
         return cfg
 
 def _preprocess(path:str =None):
-    train_cfg_path = path /"training_conf.yaml"
+    train_cfg_path =  Path(f"{path}/training_conf.yaml")
     cfg =load_config_yaml(train_cfg_path)
-    yolov7_pkl_path =  str(cfg["yolo_weight"])
+    yolov7_pkl_path =  str(cfg["yoloWeight"])
     yolov7_feats_path_pkl = str(cfg["yoloFeats"])
     dataset_path = str(cfg["datasetPath"])
     if cfg["isPreprocess"]:
@@ -423,7 +444,7 @@ def _preprocess(path:str =None):
                 preprocess_res_path=yolov7_feats_path_pkl,
             )
 def _train(path:str =None):
-    train_cfg_path = path / "training_conf.yaml"
+    train_cfg_path = Path(f"{path}/training_conf.yaml")
     cfg = load_config_yaml(train_cfg_path)
 
     local_rank = None
@@ -433,8 +454,7 @@ def _train(path:str =None):
         world_size = dist.get_world_size()
         rank = dist.get_rank()
         pkl_path = os.path.join(
-            str(ROOT),
-            "res/checkpoints",
+            "model/res/checkpoints",
             f"rank{rank}.pkl"
         )
 
@@ -450,24 +470,26 @@ def _train(path:str =None):
                 num_workers=cfg["num_workers"],
                 prefetch_factor=cfg["prefetch_factor"],
             )
-
-            train(
-                epochs=cfg["epoch"],
-                dataloader=dataloader,
-                sampler=sampler,
-                model=model,
-                optimizer=optimizer,
-                criterion=criterion,
-                klsim=klsim,
-                local_rank=local_rank,
-                ckpt= ckpt,
-                save_dir=f"{ROOT}/res/checkpoints",
-                warmup_epochs=cfg["warmupEpochs"],
-                base_lr=cfg["baseLr"],
-                min_lr=cfg["minLr"],
-                max_norm = cfg["max_norm"]
-                
-            )
+            try:
+                train(
+                    epochs=cfg["epoch"],
+                    dataloader=dataloader,
+                    sampler=sampler,
+                    model=model,
+                    optimizer=optimizer,
+                    criterion=criterion,
+                    klsim=klsim,
+                    local_rank=local_rank,
+                    ckpt= ckpt,
+                    save_dir=f"model/res/checkpoints",
+                    warmup_epochs=cfg["warmupEpochs"],
+                    base_lr=cfg["baseLr"],
+                    min_lr=cfg["minLr"],
+                    max_norm = cfg["max_norm"]
+                    
+                )
+            except Exception as e:
+                print(f"Error during training: {e}")
         else:
             print("\033[1;37;42m[Hint] isTraining is False stop training....\033[0m")
 

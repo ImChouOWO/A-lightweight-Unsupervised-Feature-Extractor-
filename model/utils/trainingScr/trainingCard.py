@@ -6,7 +6,7 @@ sys.path.append(str(ROOT))
 import torch
 from torchvision.ops import roi_align
 from torch.utils.data import Dataset
-import yolov7.yoloDetects2 as yoloDet
+import model.yolov7.yoloDetects2 as yoloDet
 import cv2
 import pickle
 from tqdm import tqdm
