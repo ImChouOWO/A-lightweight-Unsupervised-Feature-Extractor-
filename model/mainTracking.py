@@ -44,7 +44,7 @@ class TrackState:
 
 class Tracking:
     def __init__(self):
-        conf = load_conf(path="model/conf/cong.yaml")
+        conf = load_conf(path="model/conf/conf.yaml")
 
         #  tracker config block 
         if "tracker" not in conf:

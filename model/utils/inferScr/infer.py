@@ -17,7 +17,7 @@ from model.utils.valScr.val import compute_assoc_metrics
 import yaml
 
 import time
-CONFPATH = "model/conf/cong.yaml"
+CONFPATH = "model/conf/conf.yaml"
 def load_conf(path):
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)

@@ -80,7 +80,7 @@ class DisplayIDManager:
         return None if ent is None else int(ent.disp_id)
 
 
-CONFPATH = "model/conf/cong.yaml"
+CONFPATH = "model/conf/conf.yaml"
 
 
 def load_conf(path: str) -> Dict[str, Any]:
