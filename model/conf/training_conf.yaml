@@ -1,0 +1,20 @@
+yoloWeight: "model/yolov7/weights/yolov7_best.pt"
+yoloFeats: "model/res/checkpoints"
+datasetPath : "/Users/zhouchenghan/Downloads/main/model/res/val/now/pic"
+ckpt: "/Users/zhouchenghan/Downloads/main/model/res/checkpoints/epoch_last.pt"
+warmupEpochs: 10
+epoch: 500
+isPreprocess: true
+isTraining: true
+isInference: true
+batch_size : 256
+prefetch_factor : 4
+num_workers : 8
+baseLr: 0.0001        # 1e-4
+minLr: 0.00001        # 1e-5
+max_norm: 7
+
+
+#test_4-5
+# baseLr : 0.001
+# minLr : 0.00001
