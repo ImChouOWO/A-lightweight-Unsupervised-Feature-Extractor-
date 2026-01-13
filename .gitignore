@@ -1,2 +1,3 @@
 model/yolov7/**/*.pt
 model/yolov7/weights/
+model/yolov7/weights/
