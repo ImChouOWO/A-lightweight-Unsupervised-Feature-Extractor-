@@ -174,8 +174,6 @@ class MainInfer:
         import model.yolov7.yoloDetects2 as yoloDet
         import model.utils.modules.encoderAndHead as encoderAndHead
 
-        # IMPORTANT: 改成你當前版本 Tracking 的實際 import 路徑
-        # 例如：from training.tracking.utils.inferScr.tracker_current import Tracking
         from model.mainTracking import Tracking 
 
         self.torch = torch
