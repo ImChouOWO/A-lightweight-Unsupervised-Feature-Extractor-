@@ -40,7 +40,7 @@ class YoloDetects:
         self.iou_thres = iou_thres
 
         
-        # 模型預熱一次
+        # 模型預熱
         dummy_input = torch.zeros(1, 3, img_size, img_size).to(self.device)
         dummy_input = dummy_input.half() if self.half else dummy_input
         _ = self.model(dummy_input)
@@ -132,28 +132,28 @@ class YoloDetects:
         result = []
 
         if pred_nms is not None and len(pred_nms):
-            # pred_nms_xyxy_in: 這份是模型輸入座標(letterbox )，用來做 ROI
+            # pred_nms_xyxy_in: 模型輸入座標(letterbox )用於 ROI
             pred_nms_xyxy_in = pred_nms[:, :4].clone()
 
             # pred_nms_xyxy_orig: 
             pred_nms[:, :4] = scale_coords(img.shape[2:], pred_nms[:, :4], orig_frame.shape).round()
 
             for i, (*xyxy_orig, conf, cls) in enumerate(reversed(pred_nms)):
-                # 原圖座標 -> 你原本的輸出格式（維持不變）
+                # 原圖座標 -> 原本的輸出格式
                 xywh = (xyxy2xywh(torch.tensor(xyxy_orig).view(1, 4))).view(-1).tolist()
                 cx, cy, w, h = xywh
 
-                # 取出對應的「模型輸入座標 xyxy_in」
+                
                 j = pred_nms.shape[0] - 1 - i
                 xyxy_in = pred_nms_xyxy_in[j].detach().cpu().tolist()  # [x1,y1,x2,y2] in input coords
 
                 result.append({
-                    "x": cx, "y": cy, "w": w, "h": h,              # 原圖座標（不改）
+                    "x": cx, "y": cy, "w": w, "h": h,               # 原圖座標（不改）
                     "conf": float(conf),
                     "xyxy_in": xyxy_in,                             # ROI 用（模型輸入座標）
                     "input_hw": input_hw,                           # ROI 縮放用 (H_in,W_in)
-                    "ratio": ratio,    # letterbox ratio
-                    "pad": pad,        # letterbox pad (pad_w, pad_h)
+                    "ratio": ratio,                                 # letterbox ratio
+                    "pad": pad,                                     # letterbox pad (pad_w, pad_h)
 
                 })
 
@@ -161,32 +161,3 @@ class YoloDetects:
             return result, pred_raw, feat
         else:
             return result, pred_raw
-
-if __name__ == '__main__':
-
-    yoClass = YoloDetects(
-        weights=r"/Users/zhouchenghan/Desktop/v24/getAllSignal_Detect/yolov7/yolov7_best.pt"
-    )
-    cap = cv2.imread("/Users/zhouchenghan/Desktop/v24/getAllSignal_Detect/yolov7/test_pic/20251119152305.jpeg")
-    # cap = cv2.VideoCapture("rtsp://admin:Soic123456@59.127.122.125:16554/stream0")
-    # cap = cv2.VideoCapture("rtsp://admin:Soic123456@192.168.1.131:554/stream0")
-
-    # startFrame = time.time()
-    # while (True):
-    #     # 從攝影機擷取一張影像
-    #     ret, frame = cap.read()
-    #     if not ret:
-    #         # break
-    #         continue
-    #     locations = yoClass.run(frame)
-    #     print(locations)
-    locations, pred_raw, feat = yoClass.run_with_tensor(cap, return_img_tensor=True)
-    out_put ={
-        "bbox_info":locations,
-        "SPPCSPC_feat":feat.detach().cpu().numpy().tolist()
-    }
-    # with open("/Users/zhouchenghan/Desktop/v24/getAllSignal_Detect/yolov7/test_pic/test.json", "w+") as f:
-    #     json.dump(out_put, f, indent=4)
-
-    # print(locations)
- 
