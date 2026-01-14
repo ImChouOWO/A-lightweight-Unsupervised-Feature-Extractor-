@@ -45,7 +45,7 @@ class YoloDetects:
         dummy_input = dummy_input.half() if self.half else dummy_input
         _ = self.model(dummy_input)
 
-        # ✅ 這裡一次計算好 stride 與合法 img_size
+    
         self.stride = int(self.model.stride.max())
         self.img_size = check_img_size(img_size, s=self.stride)
 
