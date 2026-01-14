@@ -262,8 +262,8 @@ class MainInfer:
             eq = self.model(rq)   # [Q,D]
             ei = self.model(rc)   # [N,D]
         # L2 Normalization for cosine similarity
-        # eq = F.normalize(eq, dim=-1)
-        # ei = F.normalize(ei, dim=-1)
+        eq = F.normalize(eq, dim=-1)
+        ei = F.normalize(ei, dim=-1)
 
         # ---- similarity matrix + row softmax ----
         S = torch.matmul(eq, ei.T)                 # [Q,N]

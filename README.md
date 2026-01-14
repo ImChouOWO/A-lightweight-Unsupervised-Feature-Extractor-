@@ -14,4 +14,6 @@
 
 > [!NOTE]
 >
->  ROI Align 時為單圖擷取因此該階端的batch index 皆為0，直至搜集完全資料集中圖像之 ROI 特徵才透過DataLoader將 ROI Dataset 編入正式的batch index     
+>  ROI Align 時為單圖擷取因此該階端的batch index 皆為0，直至搜集完全資料集中圖像之 ROI 特徵才透過DataLoader將 ROI Dataset 編入正式的batch index  
+
+為驗證本模型於不同畫面下的相同物件之辨識能力，利用不同幀下的標記圖像評估模型的辨識能力，該驗證資料集透過透過成對的圖像與標記檔模擬不同幀下的圖像輸入，其中為確保指標計算得以正常進行標記檔中至少存在一個跨越不同幀的物件。
