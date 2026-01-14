@@ -83,9 +83,9 @@ class YoloDetects:
     
     def _preprocess(self, frame):
         """
-        將 BGR frame 轉成 YOLO 所需 tensor。
-        回傳:
-            img:         [1, 3, H, W] (to device, normalize 完成)
+        將 BGR frame 轉成 YOLO 所需的 tensor。
+        return:
+            img:         [1, 3, H, W] (already to device, normalize)
             orig_frame:  原始影像 (for scale_coords)
         """
         self.img_size = check_img_size(self.img_size, s=self.stride)
