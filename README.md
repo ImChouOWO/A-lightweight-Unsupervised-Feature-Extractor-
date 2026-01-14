@@ -1,5 +1,5 @@
 # A-lightweight-Unsupervised-Feature-Extractor
-
+[中文 Readme.md](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/info/README.md)
 ## Features
 
 This model is designed for **two-stage object tracking** tasks.  
