@@ -54,3 +54,41 @@
 | 訓練 Epoch     | 500                               |
 | Batch Size   | 256                               |
 | 多卡訓練         | DDP (torchrun)                    |
+---
+## 如何使用
+```
+git clone https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor.git
+```
+```
+python3.12 -m venv venv312_torch
+```
+```
+source venv312_torch/bin/activate
+```
+or
+```
+conda create -n torch312 python=3.12 -y
+```
+```
+conda activate torch312
+```
+```
+cd A-lightweight-Unsupervised-Feature-Extractor
+```
+```
+pip intall -r requirements.txt
+```
+
+### try Val
+```
+python3 val.py
+```
+### try training
+```
+torchrun --nproc_per_node=2 main_train.py
+```
+
+### try tracking
+```
+python3 tracking.py
+```
