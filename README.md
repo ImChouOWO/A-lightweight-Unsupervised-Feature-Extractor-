@@ -1,4 +1,6 @@
 # A-lightweight-Unsupervised-Feature-Extractor
+## 特色
+本模型可用於二階段的物件追蹤任務中，藉由YOLO作為上層的特徵擷取工具融合卡爾曼濾波器與匈牙利算法完成物件追蹤，在相關物件不移出畫面的理想情況下能輕易實現超過2分鐘以上的穩定追蹤而不產生ID Switch。
 ## 簡介
 本模型透過ROI技術以當下的偵測框切分YOLO骨幹網路中的深層特徵訓練而成，以骨幹網路最後一層的 `SPP-CSPC` 作為唯一的特徵來源，並將其以邊界框切分後形成數個不同的片段，最終將各個不同的片段重塑為(10,10)的形狀方便後續的訓練與推論。
 
@@ -54,11 +56,18 @@
 | 訓練 Epoch     | 500                               |
 | Batch Size   | 256                               |
 | 多卡訓練         | DDP (torchrun)                    |
+
+>[!NOTE]
+>
+> 推論時以單卡進行，平均VRAME使用率約為 9%~12%
+
 ---
 ## 如何使用
 ```
 git clone https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor.git
 ```
+---
+- Creat venv if you need
 ```
 python3.12 -m venv venv312_torch
 ```
@@ -72,6 +81,7 @@ conda create -n torch312 python=3.12 -y
 ```
 conda activate torch312
 ```
+---
 ```
 cd A-lightweight-Unsupervised-Feature-Extractor
 ```
