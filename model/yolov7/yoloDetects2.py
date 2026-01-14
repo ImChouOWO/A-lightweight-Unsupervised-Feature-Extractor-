@@ -104,12 +104,11 @@ class YoloDetects:
     
     def run_with_tensor(self, frame, return_img_tensor=False):
         """
-        新介面：
-        回傳:
+        return:
             result:      與 run() 相同的 bbox 結果 list[dict]
             pred_raw:    這張影像經過 YOLOv7 網路後的最終輸出張量 (NMS 前)
                          shape: [1, N, 5 + num_classes]，例如 [1, 25200, 85]
-            (可選) img_tensor: 前處理後輸入模型的影像張量 [1, 3, H, W]
+            (optional) img_tensor: 前處理後輸入模型的影像張量 [1, 3, H, W]
         """
         img, orig_frame, ratio, pad, input_hw = self._preprocess(frame)
 
