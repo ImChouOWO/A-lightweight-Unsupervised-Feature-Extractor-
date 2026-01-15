@@ -2,3 +2,4 @@ model/yolov7/**/*.pt
 model/yolov7/weights/
 model/yolov7/weights/
 __pycache__/
+.DS_Store
