@@ -1,5 +1,5 @@
 # A-lightweight-Unsupervised-Feature-Extractor
-[demo](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/demo/demo.gif)
+![image](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/demo/demo.gif)
 
 - [中文 Readme.md](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/info/README.md)
 ## Features
