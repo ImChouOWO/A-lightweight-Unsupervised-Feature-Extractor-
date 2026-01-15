@@ -143,5 +143,4 @@ python3 tracking.py
 >
 >This project is released under the MIT License.
 >Any use, modification, or redistribution must retain the original author attribution.
->This project is released under the MIT License.
->Any use, modification, or redistribution must retain the original author attribution.
+
