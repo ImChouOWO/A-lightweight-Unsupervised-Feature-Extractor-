@@ -4,7 +4,7 @@
 - [中文 Readme.md](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/info/README.md)
 
 ## Model Architecture
-![image](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/info/workflow.png)
+![image](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/info/workflow.jpg)
 
 ## Features
 
