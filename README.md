@@ -2,6 +2,10 @@
 ![image](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/demo/demo.gif)
 
 - [中文 Readme.md](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/info/README.md)
+
+## Model Architecture
+![image](https://github.com/ImChouOWO/A-lightweight-Unsupervised-Feature-Extractor/blob/main/info/workflow.png)
+
 ## Features
 
 This model is designed for **two-stage object tracking** tasks.  
