@@ -1,23 +1,16 @@
-# multiproc_video_infer_B.py
- 
-# Multiprocessing pipeline (B):
-# - Decode process: cv2.VideoCapture -> infer_q (frames) + disp_q (frames)
-# - Infer process : YOLOv7 + Encoder + Tracker -> res_q (assignments + boxes only)
-# - Main process  : disp_q (frames) + res_q (results) -> draw + imshow (ONLY in main)
- 
-
 from __future__ import annotations
-import sys
-from pathlib import Path
-import model.utils.tool as tool
+
 import time
 import queue as pyqueue
 import yaml
 import cv2
 import numpy as np
 import multiprocessing as mp
-from typing import Dict, Any, List, Tuple, Optional, Iterable, Set
+from multiprocessing import shared_memory
 from dataclasses import dataclass
+from typing import Dict, Any, List, Tuple, Optional, Iterable, Set
+
+import model.utils.tool as tool
 
 
 @dataclass
@@ -36,13 +29,11 @@ class DisplayIDManager:
 
     def update(self, active_internal_ids: Iterable[int], frame_idx: int) -> None:
         active: Set[int] = set(int(x) for x in active_internal_ids)
-
         for iid in active:
             ent = self._map.get(iid)
             if ent is not None:
                 ent.last_seen = int(frame_idx)
                 continue
-
             disp_id = self._alloc_display_id(frame_idx=int(frame_idx))
             self._seq += 1
             self._map[iid] = _Entry(disp_id=disp_id, last_seen=int(frame_idx), born_seq=self._seq)
@@ -52,19 +43,15 @@ class DisplayIDManager:
             disp_id = min(self._free_ids)
             self._free_ids.remove(disp_id)
             return disp_id
-
         victim_iid, victim_ent = self._select_victim(frame_idx)
         disp_id = victim_ent.disp_id
         del self._map[victim_iid]
         return disp_id
 
     def _select_victim(self, frame_idx: int) -> Tuple[int, _Entry]:
-        assert len(self._map) > 0, "Cannot recycle: map is empty."
-
         best_iid: Optional[int] = None
         best_ent: Optional[_Entry] = None
         best_score = None
-
         for iid, ent in self._map.items():
             staleness = int(frame_idx) - int(ent.last_seen)
             score = (staleness, -ent.born_seq)
@@ -72,7 +59,6 @@ class DisplayIDManager:
                 best_score = score
                 best_iid = iid
                 best_ent = ent
-
         return best_iid, best_ent
 
     def get_display_id(self, internal_id: int) -> Optional[int]:
@@ -99,19 +85,42 @@ def _cv2_runtime_tune():
         pass
 
 
+def _shm_name(base: str, i: int) -> str:
+    return f"{base}_{i}"
 
-# Process 1: Video Decode
+
+def _shm_open_buffers(base: str, n_slots: int, frame_bytes: int) -> List[shared_memory.SharedMemory]:
+    bufs = []
+    for i in range(n_slots):
+        bufs.append(shared_memory.SharedMemory(name=_shm_name(base, i), create=False, size=frame_bytes))
+    return bufs
+
+
+def _shm_create_buffers(base: str, n_slots: int, frame_bytes: int) -> List[shared_memory.SharedMemory]:
+    bufs = []
+    for i in range(n_slots):
+        bufs.append(shared_memory.SharedMemory(name=_shm_name(base, i), create=True, size=frame_bytes))
+    return bufs
 
 
 def video_decode_process(
     video_path: str,
+    shm_base: str,
+    n_slots: int,
+    frame_h: int,
+    frame_w: int,
+    free_q: mp.Queue,
     infer_q: mp.Queue,
     disp_q: mp.Queue,
+    refcounts: mp.Array,
+    ref_lock: mp.Lock,
     stop_event: mp.Event,
-    target_size: Optional[Tuple[int, int]] = None,  # (w,h) or None
     put_timeout: float = 0.2,
 ):
     _cv2_runtime_tune()
+
+    frame_bytes = int(frame_h * frame_w * 3)
+    shms = _shm_open_buffers(shm_base, n_slots, frame_bytes)
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -124,9 +133,6 @@ def video_decode_process(
             if not ret or frame is None:
                 break
 
-            if target_size is not None:
-                frame = cv2.resize(frame, target_size, interpolation=cv2.INTER_LINEAR)
-
             if frame.ndim == 2:
                 frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
             elif frame.ndim == 3 and frame.shape[2] == 4:
@@ -135,8 +141,28 @@ def video_decode_process(
             if frame.dtype != np.uint8:
                 frame = np.clip(frame, 0, 255).astype(np.uint8)
 
+            if frame.shape[0] != frame_h or frame.shape[1] != frame_w:
+                frame = cv2.resize(frame, (frame_w, frame_h), interpolation=cv2.INTER_LINEAR)
+
             frame = np.ascontiguousarray(frame)
-            item = (frame_idx, frame)
+
+            while not stop_event.is_set():
+                try:
+                    slot = free_q.get(timeout=0.2)
+                    break
+                except pyqueue.Empty:
+                    continue
+
+            if stop_event.is_set():
+                break
+
+            mv = memoryview(shms[slot].buf)
+            mv[:frame_bytes] = frame.reshape(-1).tobytes()
+
+            with ref_lock:
+                refcounts[slot] = 2
+
+            item = (int(frame_idx), int(slot))
 
             while not stop_event.is_set():
                 try:
@@ -156,25 +182,27 @@ def video_decode_process(
 
     finally:
         cap.release()
-        for q in (infer_q, disp_q):
+        try:
+            infer_q.put(None, timeout=0.5)
+        except Exception:
+            pass
+        try:
+            disp_q.put(None, timeout=0.5)
+        except Exception:
+            pass
+        for s in shms:
             try:
-                q.put(None, timeout=0.5)
+                s.close()
             except Exception:
                 pass
 
 
-
-# MainInfer (GPU process)
-
-
 class MainInfer:
     def __init__(self, yolo_weight: str, ckpt_path: Optional[str] = None):
-
         import torch
         import model.yolov7.yoloDetects2 as yoloDet
         import model.utils.modules.encoderAndHead as encoderAndHead
-
-        from model.mainTracking import Tracking 
+        from model.mainTracking import Tracking
 
         self.torch = torch
         self.device = (
@@ -206,14 +234,13 @@ class MainInfer:
             img_size=self.conf["yolo"]["img_size"],
         )
 
-       
         self.tracker = Tracking()
 
     def roi_align_from_input_boxes(
         self,
-        feat,                                  # torch.Tensor [1,C,Hf,Wf]
-        boxes_in: List[List[float]],           # [x1,y1,x2,y2] in input coords
-        input_hw: Tuple[int, int],             # (H_in,W_in)
+        feat,
+        boxes_in: List[List[float]],
+        input_hw: Tuple[int, int],
         out_size=(7, 7),
         aligned=True,
         sampling_ratio=2,
@@ -240,14 +267,16 @@ class MainInfer:
         )
 
 
-
-# Process 2: Inference + Tracking
-
-
 def inference_process(
-    video_path: str,
+    shm_base: str,
+    n_slots: int,
+    frame_h: int,
+    frame_w: int,
     infer_q: mp.Queue,
     res_q: mp.Queue,
+    free_q: mp.Queue,
+    refcounts: mp.Array,
+    ref_lock: mp.Lock,
     stop_event: mp.Event,
     conf_path: str = CONFPATH,
     queue_get_timeout: float = 0.2,
@@ -264,14 +293,9 @@ def inference_process(
         ckpt_path=conf["model"]["encoder_weight"],
     )
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    cap.release()
-
-    D = 128
+    frame_bytes = int(frame_h * frame_w * 3)
+    shms = _shm_open_buffers(shm_base, n_slots, frame_bytes)
+    frame_np = np.empty((frame_h, frame_w, 3), dtype=np.uint8)
 
     while not stop_event.is_set():
         try:
@@ -282,138 +306,157 @@ def inference_process(
         if item is None:
             break
 
-        frame_idx, frame = item
+        frame_idx, slot = int(item[0]), int(item[1])
 
-        bbox_info, _, feat = infer.yolo.run_with_tensor(frame, return_img_tensor=True)
+        mv = memoryview(shms[slot].buf)
+        frame_np.reshape(-1)[:] = np.frombuffer(mv[:frame_bytes], dtype=np.uint8, count=frame_bytes)
 
-        # ---- no detections or no feature ----
+        bbox_info, _, feat = infer.yolo.run_with_tensor(frame_np, return_img_tensor=True)
+
         if (not bbox_info) or (feat is None):
             obj = {
                 "embs": [],
                 "bboxes": [],
                 "confs": [],
-                "input_hw": (h, w),
+                "input_hw": (frame_h, frame_w),
                 "frame_id": int(frame_idx),
             }
             infer.tracker.update(obj)
             res_q.put((frame_idx, {"boxes_xyxy": [], "confs": [], "assignments": []}))
-            continue
+        else:
+            boxes_in: List[List[float]] = []
+            confs: List[float] = []
+            boxes_xyxy: List[List[int]] = []
 
-        boxes_in: List[List[float]] = []
-        confs: List[float] = []
-        boxes_xyxy: List[List[int]] = []
+            for d in bbox_info:
+                c = float(d.get("conf", 0.0))
+                if c < float(min_conf):
+                    continue
 
-        for d in bbox_info:
-            c = float(d.get("conf", 0.0))
-            if c < float(min_conf):
-                continue
+                b_in = d.get("xyxy_in", None)
+                if b_in is None or len(b_in) != 4:
+                    continue
 
-            b_in = d.get("xyxy_in", None)
-            if b_in is None or len(b_in) != 4:
-                continue
+                boxes_in.append([float(x) for x in b_in])
+                confs.append(c)
 
-            boxes_in.append([float(x) for x in b_in])
-            confs.append(c)
+                if "xyxy" in d and d["xyxy"] is not None and len(d["xyxy"]) == 4:
+                    x1, y1, x2, y2 = d["xyxy"]
+                    boxes_xyxy.append([int(x1), int(y1), int(x2), int(y2)])
+                else:
+                    cx, cy, bw, bh = float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"])
+                    x1 = int(cx - bw / 2.0)
+                    y1 = int(cy - bh / 2.0)
+                    x2 = int(cx + bw / 2.0)
+                    y2 = int(cy + bh / 2.0)
+                    boxes_xyxy.append([x1, y1, x2, y2])
 
-            if "xyxy" in d and d["xyxy"] is not None and len(d["xyxy"]) == 4:
-                x1, y1, x2, y2 = d["xyxy"]
-                boxes_xyxy.append([int(x1), int(y1), int(x2), int(y2)])
+            if len(boxes_in) == 0:
+                obj = {
+                    "embs": [],
+                    "bboxes": [],
+                    "confs": [],
+                    "input_hw": (frame_h, frame_w),
+                    "frame_id": int(frame_idx),
+                }
+                infer.tracker.update(obj)
+                res_q.put((frame_idx, {"boxes_xyxy": [], "confs": [], "assignments": []}))
             else:
-                cx, cy, bw, bh = float(d["x"]), float(d["y"]), float(d["w"]), float(d["h"])
-                x1 = int(cx - bw / 2.0)
-                y1 = int(cy - bh / 2.0)
-                x2 = int(cx + bw / 2.0)
-                y2 = int(cy + bh / 2.0)
-                boxes_xyxy.append([x1, y1, x2, y2])
+                input_hw = tuple(bbox_info[0]["input_hw"])
 
-        if len(boxes_in) == 0:
-            obj = {
-                "embs": [],
-                "bboxes": [],
-                "confs": [],
-                "input_hw": (h, w),
-                "frame_id": int(frame_idx),
-            }
-            infer.tracker.update(obj)
-            res_q.put((frame_idx, {"boxes_xyxy": [], "confs": [], "assignments": []}))
-            continue
+                roi = infer.roi_align_from_input_boxes(
+                    feat=feat,
+                    boxes_in=boxes_in,
+                    input_hw=input_hw,
+                    out_size=(7, 7),
+                )
 
-        input_hw = tuple(bbox_info[0]["input_hw"])  # (H_in, W_in)
+                with torch.no_grad():
+                    emb_cur = infer.model(roi)
+                emb_cur = F.normalize(emb_cur.float(), dim=-1)
 
-        roi = infer.roi_align_from_input_boxes(
-            feat=feat,
-            boxes_in=boxes_in,
-            input_hw=input_hw,
-            out_size=(7, 7),
-        )
+                embs_np = emb_cur.detach().cpu().numpy().astype(np.float32)
+                embs_list = [embs_np[i].reshape(-1) for i in range(embs_np.shape[0])]
 
-        with torch.no_grad():
-            emb_cur = infer.model(roi)
-        emb_cur = F.normalize(emb_cur.float(), dim=-1)  # [N,128]
+                obj = {
+                    "embs": embs_list,
+                    "bboxes": boxes_in,
+                    "confs": confs,
+                    "input_hw": tuple(input_hw),
+                    "frame_id": int(frame_idx),
+                }
 
-        
-        embs_np = emb_cur.detach().cpu().numpy().astype(np.float32)   # [N,128]
-        embs_list = [embs_np[i].reshape(-1) for i in range(embs_np.shape[0])]
+                matches_tid, _, _ = infer.tracker.update(obj)
+                assignments = [{"track_id": int(tid), "det_idx": int(det_j)} for (tid, det_j) in (matches_tid or [])]
 
-        obj = {
-            "embs": embs_list,
-            "bboxes": boxes_in,                 
-            "confs": confs,
-            "input_hw": tuple(input_hw),
-            "frame_id": int(frame_idx),
-        }
+                payload = {
+                    "boxes_xyxy": boxes_xyxy,
+                    "confs": confs,
+                    "assignments": assignments,
+                }
+                res_q.put((frame_idx, payload))
 
-        # 回傳 matches_tid = [(track_id, det_j), ...]
-        matches_tid, _, _ = infer.tracker.update(obj)
-
-        assignments = [{"track_id": int(tid), "det_idx": int(det_j)} for (tid, det_j) in (matches_tid or [])]
-
-        payload = {
-            "boxes_xyxy": boxes_xyxy,
-            "confs": confs,
-            "assignments": assignments,
-        }
-        res_q.put((frame_idx, payload))
+        with ref_lock:
+            refcounts[slot] -= 1
+            if refcounts[slot] <= 0:
+                refcounts[slot] = 0
+                try:
+                    free_q.put_nowait(slot)
+                except Exception:
+                    pass
 
     try:
         res_q.put(None, timeout=0.5)
     except Exception:
         pass
 
+    for s in shms:
+        try:
+            s.close()
+        except Exception:
+            pass
 
 
-# Main: display + draw
-
-
-def track(video_path: str, out_path: str, queue_size: int = 16, show_window: bool = True, max_ids: int = 40):
+def track(
+    video_path: str,
+    out_path: Optional[str] = None,
+    queue_size: int = 8,
+    show_window: bool = True,
+    max_ids: int = 40,
+    target_size: Tuple[int, int] = (1280, 720),
+):
     mp.set_start_method("spawn", force=True)
     _cv2_runtime_tune()
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if total_frames <= 0:
-        total_frames = None
-    cap.release()
+    frame_w, frame_h = int(target_size[0]), int(target_size[1])
+    n_slots = int(max(2, min(32, queue_size)))
+    shm_base = f"trk_shm_{int(time.time() * 1e6)}"
+    frame_bytes = int(frame_h * frame_w * 3)
 
-    infer_q: mp.Queue = mp.Queue(maxsize=int(queue_size))
-    disp_q: mp.Queue = mp.Queue(maxsize=int(queue_size))
-    res_q: mp.Queue = mp.Queue(maxsize=int(queue_size))
+    shms = _shm_create_buffers(shm_base, n_slots, frame_bytes)
+
+    free_q: mp.Queue = mp.Queue(maxsize=n_slots)
+    infer_q: mp.Queue = mp.Queue(maxsize=n_slots)
+    disp_q: mp.Queue = mp.Queue(maxsize=n_slots)
+    res_q: mp.Queue = mp.Queue(maxsize=n_slots)
+
+    for i in range(n_slots):
+        free_q.put(i)
+
     stop_event: mp.Event = mp.Event()
-
-    target_size = (1920, 1080)
+    refcounts = mp.Array("i", [0] * n_slots, lock=False)
+    ref_lock = mp.Lock()
 
     p_decode = mp.Process(
         target=video_decode_process,
-        args=(video_path, infer_q, disp_q, stop_event, target_size),
+        args=(video_path, shm_base, n_slots, frame_h, frame_w, free_q, infer_q, disp_q, refcounts, ref_lock, stop_event, 0.2),
         name="video_decode",
         daemon=True,
     )
 
     p_infer = mp.Process(
         target=inference_process,
-        args=(video_path, infer_q, res_q, stop_event, CONFPATH, 0.2, 0.01),
+        args=(shm_base, n_slots, frame_h, frame_w, infer_q, res_q, free_q, refcounts, ref_lock, stop_event, CONFPATH, 0.2, 0.01),
         name="inference",
         daemon=False,
     )
@@ -421,16 +464,14 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
     p_decode.start()
     p_infer.start()
 
-    from tqdm import tqdm
-
-    WIN = "tracking"
     if show_window:
+        WIN = "tracking"
         cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(WIN, 1280, 720)
 
     res_buf: Dict[int, Dict[str, Any]] = {}
 
-    def drain_results(max_items: int = 64):
+    def drain_results(max_items: int = 256) -> bool:
         cnt = 0
         while cnt < max_items:
             try:
@@ -445,12 +486,16 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
         return True
 
     mon = tool.ResourceMonitor(gpu_index=0, sample_interval=0.2).start()
-    all_gpu = []
-    all_cpu = []
+    all_gpu: List[float] = []
+    all_cpu: List[float] = []
+
+    from tqdm import tqdm
+
+    frame_np = np.empty((frame_h, frame_w, 3), dtype=np.uint8)
 
     try:
         id_manager = DisplayIDManager(max_ids=max_ids)
-        with tqdm(total=total_frames, desc="Tracking", unit="frame", dynamic_ncols=True) as pbar:
+        with tqdm(total=None, desc="Tracking", unit="frame", dynamic_ncols=True) as pbar:
             while True:
                 alive = drain_results()
                 if not alive:
@@ -466,16 +511,37 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
                 if item is None:
                     break
 
-                frame_idx, frame = item
+                frame_idx, slot = int(item[0]), int(item[1])
+
+                mv = memoryview(shms[slot].buf)
+                frame_np.reshape(-1)[:] = np.frombuffer(mv[:frame_bytes], dtype=np.uint8, count=frame_bytes)
+
                 payload = res_buf.pop(frame_idx, None)
-                if payload is None:
-                    drain_results(max_items=128)
+                t0 = time.time()
+                while payload is None and (time.time() - t0) < 0.2:
+                    drain_results(max_items=512)
                     payload = res_buf.pop(frame_idx, None)
+                    if payload is not None:
+                        break
+                    time.sleep(0.001)
 
                 if payload is not None:
                     boxes_xyxy = payload.get("boxes_xyxy", [])
                     confs = payload.get("confs", [])
                     assignments = payload.get("assignments", [])
+
+                    for i, (x1, y1, x2, y2) in enumerate(boxes_xyxy):
+                        c = float(confs[i]) if i < len(confs) else 0.0
+                        cv2.rectangle(frame_np, (x1, y1), (x2, y2), (255, 255, 0), 2)
+                        cv2.putText(
+                            frame_np,
+                            f"D{i}:{c:.2f}",
+                            (x1, max(0, y1 - 5)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (0, 0, 0),
+                            2,
+                        )
 
                     active_ids = [a["track_id"] for a in assignments]
                     id_manager.update(active_ids, frame_idx)
@@ -483,21 +549,18 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
                     for a in assignments:
                         internal_id = int(a["track_id"])
                         det_idx = int(a["det_idx"])
-
                         display_id = id_manager.get_display_id(internal_id)
                         if display_id is None:
                             continue
                         if det_idx < 0 or det_idx >= len(boxes_xyxy):
                             continue
-
                         x1, y1, x2, y2 = boxes_xyxy[det_idx]
                         c = float(confs[det_idx]) if det_idx < len(confs) else 0.0
-
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.rectangle(frame_np, (x1, y1), (x2, y2), (0, 255, 0), 2)
                         cv2.putText(
-                            frame,
+                            frame_np,
                             f"ID:{display_id} Conf:{c:.2f}",
-                            (x1, max(0, y1 - 5)),
+                            (x1, max(0, y1 - 28)),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             1,
                             (0, 0, 0),
@@ -507,7 +570,7 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
                     pbar.set_postfix(
                         det=len(boxes_xyxy),
                         cpu=f"{mon.cpu_util:.0f}%",
-                        gpu=f"{mon.gpu_util:.0f}%"
+                        gpu=f"{mon.gpu_util:.0f}%",
                     )
                     all_gpu.append(mon.gpu_util)
                     all_cpu.append(mon.cpu_util)
@@ -515,15 +578,31 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
                     pbar.set_postfix(det="-")
 
                 if show_window:
-                    cv2.imshow(WIN, frame)
+                    cv2.imshow("tracking", frame_np)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         stop_event.set()
-                        for q in (infer_q, disp_q, res_q):
-                            try:
-                                q.put_nowait(None)
-                            except Exception:
-                                pass
+                        try:
+                            infer_q.put_nowait(None)
+                        except Exception:
+                            pass
+                        try:
+                            disp_q.put_nowait(None)
+                        except Exception:
+                            pass
+                        try:
+                            res_q.put_nowait(None)
+                        except Exception:
+                            pass
                         break
+
+                with ref_lock:
+                    refcounts[slot] -= 1
+                    if refcounts[slot] <= 0:
+                        refcounts[slot] = 0
+                        try:
+                            free_q.put_nowait(slot)
+                        except Exception:
+                            pass
 
                 pbar.update(1)
 
@@ -537,12 +616,22 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
             p_infer.join(timeout=2.0)
         if p_decode.is_alive():
             p_decode.join(timeout=2.0)
+
+        for s in shms:
+            try:
+                s.close()
+            except Exception:
+                pass
+            try:
+                s.unlink()
+            except Exception:
+                pass
+
         if all_cpu and all_gpu:
-            print(f"[Res]: avg cpu {sum(all_cpu)/ len(all_cpu):.2f}% , avg gpu {sum(all_gpu)/len(all_gpu):.2f}%")
+            print(f"[Res]: avg cpu {sum(all_cpu)/len(all_cpu):.2f}% , avg gpu {sum(all_gpu)/len(all_gpu):.2f}%")
             print(f"[Res]: max cpu {max(all_cpu):.2f}% , max gpu {max(all_gpu):.2f}%")
 
 
 if __name__ == "__main__":
     video_path = "video/car.mp4" # PATH TO YOUR VIDEO FILE
-    out_path = None
-    track(video_path, out_path, queue_size=16, show_window=True)
+    track(video_path, out_path=None, queue_size=8, show_window=True, max_ids=40, target_size=(1280, 720))
