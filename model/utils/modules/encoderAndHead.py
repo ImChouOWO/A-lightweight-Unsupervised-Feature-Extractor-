@@ -8,7 +8,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import model.utils.modules.card as card
-
 class Model(nn.Module):
     def __init__(self,
                 in_channels=None,
@@ -25,3 +24,5 @@ class Model(nn.Module):
         feat = feat.mean(dim=(2, 3))     # GAP → [B, C]
         z = self.head(feat)              # [B, D]
         return z
+    
+

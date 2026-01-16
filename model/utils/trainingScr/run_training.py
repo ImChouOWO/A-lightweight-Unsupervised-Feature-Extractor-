@@ -10,6 +10,7 @@ import torch.nn as nn
 from tqdm import tqdm
 import model.utils.trainingScr.trainingCard as trainingCardMod
 import model.utils.modules.encoderAndHead as encoderAndHead
+import model.utils.modules.qat as qatMod
 import model.utils.loss.loss as loss
 import model.utils.inferScr.infer as inferMod
 import yaml
@@ -20,7 +21,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import time
 from torch.amp import autocast
-
+import torch.quantization as tq
 def cosine_lr(epoch, total_epochs, base_lr, min_lr, warmup_epochs):
     # epoch: 1..total_epochs
     if epoch <= warmup_epochs:
@@ -50,7 +51,7 @@ def ddp_setup():
 def ddp_cleanup():
     dist.destroy_process_group()
 
-def _init_training(pkl_path,world_size, local_rank, device="cuda", warmup_epochs=10, batch = 64, num_workers=16, prefetch_factor=4, ckpt_path = None):
+def _init_training(pkl_path,world_size, local_rank, device="cuda", warmup_epochs=10, batch = 64, num_workers=16, prefetch_factor=4, ckpt_path = None, isQAT = False, lr_rate = 3e-4):
     is_main = (local_rank == 0)
     if is_main:
         print("\033[1;37;42m[Hint] Initializing training...\033[0m")
@@ -97,6 +98,10 @@ def _init_training(pkl_path,world_size, local_rank, device="cuda", warmup_epochs
                     proj_dim = 128).to(device)
         # disable inplace before training (safe even if already applied)
         model.apply(disable_inplace)
+        if bool(isQAT):
+            model = qatMod.QATWrapper(model)
+            model.qconfig = tq.get_default_qat_qconfig("fbgemm")
+            tq.prepare_qat(model, inplace=True)
         if ckpt_path is not None:
             ckpt_path = Path(ckpt_path)
 
@@ -109,7 +114,11 @@ def _init_training(pkl_path,world_size, local_rank, device="cuda", warmup_epochs
 
             # 常見格式保護
             if "model" in ckpt:
-                model.load_state_dict(ckpt["model"], strict=True)
+                if bool(isQAT):
+                    model.model.load_state_dict(ckpt["model"], strict=True)
+                else:
+                    model.load_state_dict(ckpt["model"], strict=True)
+
             else:
                 # 有些 checkpoint 直接存 state_dict
                 model.load_state_dict(ckpt, strict=True)
@@ -119,8 +128,8 @@ def _init_training(pkl_path,world_size, local_rank, device="cuda", warmup_epochs
             ckpt = None
             print("[Status] No checkpoint, start with empty")
 
-        if ckpt_path is not None:    
-            model.load_state_dict(ckpt["model"], strict=True)
+
+
 
         model = DDP(
             model,
@@ -130,7 +139,7 @@ def _init_training(pkl_path,world_size, local_rank, device="cuda", warmup_epochs
         )
         optimizer = torch.optim.AdamW(
             model.parameters(),
-            lr=3e-4,
+            lr=lr_rate,
             weight_decay=1e-4
         )
         if ckpt_path is not None:    
@@ -208,7 +217,8 @@ def train(
     base_lr=3e-4,
     beta=0.9,
     min_lr=3e-6,
-    max_norm =1
+    max_norm =1,
+    isQAT = False,
 ):
     if not torch.cuda.is_bf16_supported():
         raise RuntimeError("BF16 not supported on this GPU")
@@ -263,7 +273,13 @@ def train(
         model.train()
         if hasattr(model.module, "rmb"):
             model.module.rmb.set_epoch(epoch)
-
+        
+        if epoch == 3 and isQAT is not False:
+            model.apply(torch.quantization.disable_observer)
+            print(f"[Rank {dist.get_rank()}] Disabled observers for QAT at epoch {epoch}")
+        if epoch == 5 and isQAT is not False:
+            model.apply(torch.nn.intrinsic.qat.freeze_bn_stats)
+            print(f"[Rank {dist.get_rank()}] Frozen batchnorm stats for QAT at epoch {epoch}")
         total_loss = 0.0
 
         for step, (v1, v2, t) in enumerate(dataloader, start=1):
@@ -457,7 +473,17 @@ def _train(path:str =None):
             "model/res/checkpoints",
             f"rank{rank}.pkl"
         )
-
+        if cfg["QAT"]['isQAT'] is not False:
+            print(f"[Rank {dist.get_rank()}] QAT is enabled.")
+            epochs = cfg["QAT"]["epoch"]
+            lr_rate = cfg["QAT"]["lr_rate"]
+            min_lr=cfg["QAT"]["minLr"]
+            print(f"[info] QAT epochs: {epochs}, lr_rate: {lr_rate}, min_lr: {min_lr}")
+        else:
+            epochs = cfg["epoch"]
+            lr_rate = cfg["baseLr"]
+            min_lr=cfg["minLr"]
+            print(f"[info] Training epochs: {epochs}, lr_rate: {lr_rate}, min_lr: {min_lr}")
 
         if cfg["isTraining"]:
             dataloader, sampler, model, optimizer, criterion, klsim, ckpt= _init_training(
@@ -469,10 +495,13 @@ def _train(path:str =None):
                 batch=cfg["batch_size"],
                 num_workers=cfg["num_workers"],
                 prefetch_factor=cfg["prefetch_factor"],
+                isQAT=cfg["QAT"]['isQAT'],
+                lr_rate=lr_rate,
             )
             try:
+                
                 train(
-                    epochs=cfg["epoch"],
+                    epochs=epochs,
                     dataloader=dataloader,
                     sampler=sampler,
                     model=model,
@@ -483,9 +512,10 @@ def _train(path:str =None):
                     ckpt= ckpt,
                     save_dir=f"model/res/checkpoints",
                     warmup_epochs=cfg["warmupEpochs"],
-                    base_lr=cfg["baseLr"],
-                    min_lr=cfg["minLr"],
-                    max_norm = cfg["max_norm"]
+                    base_lr=lr_rate,
+                    min_lr=min_lr,
+                    max_norm = cfg["max_norm"],
+                    isQAT = cfg['QAT']["isQAT"],
                     
                 )
             except Exception as e:
