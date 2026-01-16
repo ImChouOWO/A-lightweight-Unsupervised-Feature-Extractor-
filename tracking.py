@@ -36,13 +36,11 @@ class DisplayIDManager:
 
     def update(self, active_internal_ids: Iterable[int], frame_idx: int) -> None:
         active: Set[int] = set(int(x) for x in active_internal_ids)
-
         for iid in active:
             ent = self._map.get(iid)
             if ent is not None:
                 ent.last_seen = int(frame_idx)
                 continue
-
             disp_id = self._alloc_display_id(frame_idx=int(frame_idx))
             self._seq += 1
             self._map[iid] = _Entry(disp_id=disp_id, last_seen=int(frame_idx), born_seq=self._seq)
@@ -52,19 +50,16 @@ class DisplayIDManager:
             disp_id = min(self._free_ids)
             self._free_ids.remove(disp_id)
             return disp_id
-
         victim_iid, victim_ent = self._select_victim(frame_idx)
         disp_id = victim_ent.disp_id
         del self._map[victim_iid]
         return disp_id
 
     def _select_victim(self, frame_idx: int) -> Tuple[int, _Entry]:
-        assert len(self._map) > 0, "Cannot recycle: map is empty."
-
+        assert len(self._map) > 0
         best_iid: Optional[int] = None
         best_ent: Optional[_Entry] = None
         best_score = None
-
         for iid, ent in self._map.items():
             staleness = int(frame_idx) - int(ent.last_seen)
             score = (staleness, -ent.born_seq)
@@ -72,7 +67,6 @@ class DisplayIDManager:
                 best_score = score
                 best_iid = iid
                 best_ent = ent
-
         return best_iid, best_ent
 
     def get_display_id(self, internal_id: int) -> Optional[int]:
@@ -99,20 +93,15 @@ def _cv2_runtime_tune():
         pass
 
 
-
-# Process 1: Video Decode
-
-
 def video_decode_process(
     video_path: str,
     infer_q: mp.Queue,
     disp_q: mp.Queue,
     stop_event: mp.Event,
-    target_size: Optional[Tuple[int, int]] = None,  # (w,h) or None
+    target_size: Optional[Tuple[int, int]] = None,
     put_timeout: float = 0.2,
 ):
     _cv2_runtime_tune()
-
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
@@ -153,7 +142,6 @@ def video_decode_process(
                     continue
 
             frame_idx += 1
-
     finally:
         cap.release()
         for q in (infer_q, disp_q):
@@ -163,18 +151,12 @@ def video_decode_process(
                 pass
 
 
-
-# MainInfer (GPU process)
-
-
 class MainInfer:
     def __init__(self, yolo_weight: str, ckpt_path: Optional[str] = None):
-
         import torch
         import model.yolov7.yoloDetects2 as yoloDet
         import model.utils.modules.encoderAndHead as encoderAndHead
-
-        from model.mainTracking import Tracking 
+        from model.mainTracking import Tracking
 
         self.torch = torch
         self.device = (
@@ -206,14 +188,13 @@ class MainInfer:
             img_size=self.conf["yolo"]["img_size"],
         )
 
-       
         self.tracker = Tracking()
 
     def roi_align_from_input_boxes(
         self,
-        feat,                                  # torch.Tensor [1,C,Hf,Wf]
-        boxes_in: List[List[float]],           # [x1,y1,x2,y2] in input coords
-        input_hw: Tuple[int, int],             # (H_in,W_in)
+        feat,
+        boxes_in: List[List[float]],
+        input_hw: Tuple[int, int],
         out_size=(7, 7),
         aligned=True,
         sampling_ratio=2,
@@ -240,10 +221,6 @@ class MainInfer:
         )
 
 
-
-# Process 2: Inference + Tracking
-
-
 def inference_process(
     video_path: str,
     infer_q: mp.Queue,
@@ -254,7 +231,6 @@ def inference_process(
     min_conf: float = 0.01,
 ):
     _cv2_runtime_tune()
-
     import torch
     import torch.nn.functional as F
 
@@ -271,8 +247,6 @@ def inference_process(
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     cap.release()
 
-    D = 128
-
     while not stop_event.is_set():
         try:
             item = infer_q.get(timeout=queue_get_timeout)
@@ -286,15 +260,8 @@ def inference_process(
 
         bbox_info, _, feat = infer.yolo.run_with_tensor(frame, return_img_tensor=True)
 
-        # ---- no detections or no feature ----
         if (not bbox_info) or (feat is None):
-            obj = {
-                "embs": [],
-                "bboxes": [],
-                "confs": [],
-                "input_hw": (h, w),
-                "frame_id": int(frame_idx),
-            }
+            obj = {"embs": [], "bboxes": [], "confs": [], "input_hw": (h, w), "frame_id": int(frame_idx)}
             infer.tracker.update(obj)
             res_q.put((frame_idx, {"boxes_xyxy": [], "confs": [], "assignments": []}))
             continue
@@ -327,18 +294,12 @@ def inference_process(
                 boxes_xyxy.append([x1, y1, x2, y2])
 
         if len(boxes_in) == 0:
-            obj = {
-                "embs": [],
-                "bboxes": [],
-                "confs": [],
-                "input_hw": (h, w),
-                "frame_id": int(frame_idx),
-            }
+            obj = {"embs": [], "bboxes": [], "confs": [], "input_hw": (h, w), "frame_id": int(frame_idx)}
             infer.tracker.update(obj)
             res_q.put((frame_idx, {"boxes_xyxy": [], "confs": [], "assignments": []}))
             continue
 
-        input_hw = tuple(bbox_info[0]["input_hw"])  # (H_in, W_in)
+        input_hw = tuple(bbox_info[0]["input_hw"])
 
         roi = infer.roi_align_from_input_boxes(
             feat=feat,
@@ -349,40 +310,28 @@ def inference_process(
 
         with torch.no_grad():
             emb_cur = infer.model(roi)
-        emb_cur = F.normalize(emb_cur.float(), dim=-1)  # [N,128]
+        emb_cur = F.normalize(emb_cur.float(), dim=-1)
 
-        
-        embs_np = emb_cur.detach().cpu().numpy().astype(np.float32)   # [N,128]
+        embs_np = emb_cur.detach().cpu().numpy().astype(np.float32)
         embs_list = [embs_np[i].reshape(-1) for i in range(embs_np.shape[0])]
 
         obj = {
             "embs": embs_list,
-            "bboxes": boxes_in,                 
+            "bboxes": boxes_in,
             "confs": confs,
             "input_hw": tuple(input_hw),
             "frame_id": int(frame_idx),
         }
 
-        # 回傳 matches_tid = [(track_id, det_j), ...]
         matches_tid, _, _ = infer.tracker.update(obj)
-
         assignments = [{"track_id": int(tid), "det_idx": int(det_j)} for (tid, det_j) in (matches_tid or [])]
 
-        payload = {
-            "boxes_xyxy": boxes_xyxy,
-            "confs": confs,
-            "assignments": assignments,
-        }
-        res_q.put((frame_idx, payload))
+        res_q.put((frame_idx, {"boxes_xyxy": boxes_xyxy, "confs": confs, "assignments": assignments}))
 
     try:
         res_q.put(None, timeout=0.5)
     except Exception:
         pass
-
-
-
-# Main: display + draw
 
 
 def track(video_path: str, out_path: str, queue_size: int = 16, show_window: bool = True, max_ids: int = 40):
@@ -430,7 +379,7 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
 
     res_buf: Dict[int, Dict[str, Any]] = {}
 
-    def drain_results(max_items: int = 64):
+    def drain_results(max_items: int = 256):
         cnt = 0
         while cnt < max_items:
             try:
@@ -447,6 +396,8 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
     mon = tool.ResourceMonitor(gpu_index=0, sample_interval=0.2).start()
     all_gpu = []
     all_cpu = []
+
+    BOX_COLOR = (0, 255, 0)
 
     try:
         id_manager = DisplayIDManager(max_ids=max_ids)
@@ -468,8 +419,9 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
 
                 frame_idx, frame = item
                 payload = res_buf.pop(frame_idx, None)
+
                 if payload is None:
-                    drain_results(max_items=128)
+                    drain_results(max_items=1024)
                     payload = res_buf.pop(frame_idx, None)
 
                 if payload is not None:
@@ -477,13 +429,25 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
                     confs = payload.get("confs", [])
                     assignments = payload.get("assignments", [])
 
+                    for i, (x1, y1, x2, y2) in enumerate(boxes_xyxy):
+                        c = float(confs[i]) if i < len(confs) else 0.0
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), BOX_COLOR, 2)
+                        cv2.putText(
+                            frame,
+                            f"D{i}:{c:.2f}",
+                            (x1, max(0, y1 - 5)),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (0, 0, 0),
+                            2,
+                        )
+
                     active_ids = [a["track_id"] for a in assignments]
                     id_manager.update(active_ids, frame_idx)
 
                     for a in assignments:
                         internal_id = int(a["track_id"])
                         det_idx = int(a["det_idx"])
-
                         display_id = id_manager.get_display_id(internal_id)
                         if display_id is None:
                             continue
@@ -493,22 +457,18 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
                         x1, y1, x2, y2 = boxes_xyxy[det_idx]
                         c = float(confs[det_idx]) if det_idx < len(confs) else 0.0
 
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), BOX_COLOR, 2)
                         cv2.putText(
                             frame,
                             f"ID:{display_id} Conf:{c:.2f}",
-                            (x1, max(0, y1 - 5)),
+                            (x1, max(0, y1 - 28)),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             1,
                             (0, 0, 0),
                             3,
                         )
 
-                    pbar.set_postfix(
-                        det=len(boxes_xyxy),
-                        cpu=f"{mon.cpu_util:.0f}%",
-                        gpu=f"{mon.gpu_util:.0f}%"
-                    )
+                    pbar.set_postfix(det=len(boxes_xyxy), cpu=f"{mon.cpu_util:.0f}%", gpu=f"{mon.gpu_util:.0f}%")
                     all_gpu.append(mon.gpu_util)
                     all_cpu.append(mon.cpu_util)
                 else:
@@ -537,12 +497,14 @@ def track(video_path: str, out_path: str, queue_size: int = 16, show_window: boo
             p_infer.join(timeout=2.0)
         if p_decode.is_alive():
             p_decode.join(timeout=2.0)
+
         if all_cpu and all_gpu:
-            print(f"[Res]: avg cpu {sum(all_cpu)/ len(all_cpu):.2f}% , avg gpu {sum(all_gpu)/len(all_gpu):.2f}%")
+            print(f"[Res]: avg cpu {sum(all_cpu)/len(all_cpu):.2f}% , avg gpu {sum(all_gpu)/len(all_gpu):.2f}%")
             print(f"[Res]: max cpu {max(all_cpu):.2f}% , max gpu {max(all_gpu):.2f}%")
 
 
 if __name__ == "__main__":
-    video_path = "video/car.mp4" # PATH TO YOUR VIDEO FILE
+    video_path = "video/car.mp4"
     out_path = None
     track(video_path, out_path, queue_size=16, show_window=True)
+

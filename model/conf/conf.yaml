@@ -30,8 +30,8 @@ model:
   tau: 0.2                      # encoder 相似度 softmax 溫度  越小分佈越尖銳（更自信）
 
 yolo:
-  conf_thres: 0.7              # YOLO 偵測信心門檻 高：少假框但小物件易漏
+  conf_thres: 0.55              # YOLO 偵測信心門檻 高：少假框但小物件易漏
   iou_thres: 0.5                # NMS IoU 門檻
-  img_size: 1280                # 輸入解析度 對小物件偵測影響最大
+  img_size: 640                # 輸入解析度 對小物件偵測影響最大
   in_channels: 512
   out_channels: 512
