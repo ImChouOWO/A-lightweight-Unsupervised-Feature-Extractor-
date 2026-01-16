@@ -138,6 +138,11 @@ Run Tracking
 ```
 python3 tracking.py
 ```
+or if your system is windows
+```
+python3 tracking_win.py
+```
+
 ---
 > **Note**
 >
