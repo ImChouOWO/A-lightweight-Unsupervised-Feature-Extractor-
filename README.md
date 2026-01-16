@@ -136,12 +136,19 @@ torchrun --nproc_per_node=2 main_train.py
 ```
 Run Tracking
 ```
-python3 tracking.py
+python3 tracking.py 
 ```
-or if your system is windows
+> **Note**
+> 
+> for linux or linux like system
+
+
 ```
 python3 tracking_win.py
 ```
+> **Note**
+> 
+>for windows system
 
 ---
 > **Note**
