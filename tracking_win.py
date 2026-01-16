@@ -296,8 +296,7 @@ def inference_process(
     frame_bytes = int(frame_h * frame_w * 3)
     shms = _shm_open_buffers(shm_base, n_slots, frame_bytes)
     frame_np = np.empty((frame_h, frame_w, 3), dtype=np.uint8)
-    cfg = load_conf(CONFPATH)
-    cand_gate = int(cfg["yolo"].get("nms_candidates", 5))
+    cand_gate = int(conf["yolo"].get("nms_candidates", 5))
     while not stop_event.is_set():
         try:
             item = infer_q.get(timeout=queue_get_timeout)

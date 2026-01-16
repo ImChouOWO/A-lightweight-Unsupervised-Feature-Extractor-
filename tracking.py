@@ -246,8 +246,7 @@ def inference_process(
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     cap.release()
-    cfg = load_conf(CONFPATH)
-    cand_gate = int(cfg["yolo"].get("nms_candidates", 5))
+    cand_gate = int(conf["yolo"].get("nms_candidates", 5))
     while not stop_event.is_set():
         try:
             item = infer_q.get(timeout=queue_get_timeout)
