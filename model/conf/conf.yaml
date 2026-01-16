@@ -35,3 +35,4 @@ yolo:
   img_size: 640                # 輸入解析度 對小物件偵測影響最大
   in_channels: 512
   out_channels: 512
+  nms_candidates: 5

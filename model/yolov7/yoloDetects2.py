@@ -102,7 +102,7 @@ class YoloDetects:
 
         return img, frame, ratio, pad, input_hw
     
-    def run_with_tensor(self, frame, return_img_tensor=False):
+    def run_with_tensor(self, frame, return_img_tensor=False, cand_gate = 5):
         """
         return:
             result:      與 run() 相同的 bbox 結果 list[dict]
@@ -120,7 +120,7 @@ class YoloDetects:
         obj = pred_raw[0, :, 4]  # objectness, shape [N]
         cand_count = int((obj > self.conf_thres).sum().item())
 
-        if cand_count < 5:
+        if cand_count < cand_gate:
             pred_nms = None
             feat = None 
         else:

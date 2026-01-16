@@ -19,7 +19,10 @@ import multiprocessing as mp
 from typing import Dict, Any, List, Tuple, Optional, Iterable, Set
 from dataclasses import dataclass
 
-
+CONFPATH = "model/conf/conf.yaml"
+def load_conf(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 @dataclass
 class _Entry:
     disp_id: int
@@ -246,7 +249,8 @@ def inference_process(
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     cap.release()
-
+    cfg = load_conf(CONFPATH)
+    cand_gate = int(cfg["yolo"].get("nms_candidates", 5))
     while not stop_event.is_set():
         try:
             item = infer_q.get(timeout=queue_get_timeout)
@@ -258,7 +262,7 @@ def inference_process(
 
         frame_idx, frame = item
 
-        bbox_info, _, feat = infer.yolo.run_with_tensor(frame, return_img_tensor=True)
+        bbox_info, _, feat = infer.yolo.run_with_tensor(frame, return_img_tensor=True, cand_gate=cand_gate)
 
         if (not bbox_info) or (feat is None):
             obj = {"embs": [], "bboxes": [], "confs": [], "input_hw": (h, w), "frame_id": int(frame_idx)}

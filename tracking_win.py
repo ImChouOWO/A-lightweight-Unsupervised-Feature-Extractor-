@@ -11,7 +11,10 @@ from dataclasses import dataclass
 from typing import Dict, Any, List, Tuple, Optional, Iterable, Set
 
 import model.utils.tool as tool
-
+CONFPATH = "model/conf/conf.yaml"
+def load_conf(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
 
 @dataclass
 class _Entry:
@@ -296,7 +299,8 @@ def inference_process(
     frame_bytes = int(frame_h * frame_w * 3)
     shms = _shm_open_buffers(shm_base, n_slots, frame_bytes)
     frame_np = np.empty((frame_h, frame_w, 3), dtype=np.uint8)
-
+    cfg = load_conf(CONFPATH)
+    cand_gate = int(cfg["yolo"].get("nms_candidates", 5))
     while not stop_event.is_set():
         try:
             item = infer_q.get(timeout=queue_get_timeout)
@@ -311,7 +315,7 @@ def inference_process(
         mv = memoryview(shms[slot].buf)
         frame_np.reshape(-1)[:] = np.frombuffer(mv[:frame_bytes], dtype=np.uint8, count=frame_bytes)
 
-        bbox_info, _, feat = infer.yolo.run_with_tensor(frame_np, return_img_tensor=True)
+        bbox_info, _, feat = infer.yolo.run_with_tensor(frame_np, return_img_tensor=True, cand_gate=cand_gate)
 
         if (not bbox_info) or (feat is None):
             obj = {
