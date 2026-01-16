@@ -11,10 +11,7 @@ from dataclasses import dataclass
 from typing import Dict, Any, List, Tuple, Optional, Iterable, Set
 
 import model.utils.tool as tool
-CONFPATH = "model/conf/conf.yaml"
-def load_conf(path):
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+
 
 @dataclass
 class _Entry:
